@@ -1,0 +1,15 @@
+<idea-plugin>
+    <id>key-hint</id>
+    <name>Key Hint</name>
+    <version>1.0</version>
+    <vendor>Example</vendor>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.lang</depends>
+    <depends>com.intellij.modules.java</depends>
+
+    <applicationListeners>
+        <listener class="keyhint.KeyHintListenerRegistrar" topic="com.intellij.ide.AppLifecycleListener"/>
+        <listener class="keyhint.KeyHintListenerRegistrar" topic="com.intellij.ide.plugins.DynamicPluginListener"/>
+    </applicationListeners>
+</idea-plugin>
