@@ -16,7 +16,7 @@ class IntValueTrie<T : Any> {
 
 	fun findValueByExactMatch(arr: IntArray): T? = findNodeOrNull(arr)?.value
 
-	fun findValueByPrefix(arr: IntArray): Sequence<T> {
+	fun findValuesByPrefix(arr: IntArray): Sequence<T> {
 		val seed = findNodeOrNull(arr) ?: return emptySequence()
 		return sequence {
 			deepFirstSearch(

@@ -14,6 +14,7 @@ import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.event.EditorFactoryEvent
 import com.intellij.openapi.editor.event.EditorFactoryListener
+import com.intellij.openapi.keymap.ex.KeymapManagerEx
 import com.intellij.openapi.util.Disposer
 import java.awt.event.KeyEvent
 import java.util.*
@@ -53,11 +54,10 @@ class KeyHintService : PersistentStateComponent<KeyHintState>, Disposable {
 	}
 
 	fun initialize() {
-		if (listener == null) {
-			val new = KeyHintEditorFactoryListener()
-			listener = new
-			EditorFactory.getInstance().addEditorFactoryListener(new, this)
-		}
+		if (listener != null) return
+		val new = KeyHintEditorFactoryListener()
+		listener = new
+		EditorFactory.getInstance().addEditorFactoryListener(new, this)
 	}
 
 	override fun dispose() {
@@ -66,13 +66,13 @@ class KeyHintService : PersistentStateComponent<KeyHintState>, Disposable {
 }
 
 class KeyHintEditorFactoryListener : EditorFactoryListener {
-	private val listenerMap = Collections.synchronizedMap(IdentityHashMap<Editor, KeyHintEditorKeyListener>())
+	private val listenerMap = Collections.synchronizedMap(IdentityHashMap<Editor, KeyHintKeyListener>())
 
 	override fun editorCreated(event: EditorFactoryEvent) {
 		val editor = event.editor
 		if (editor in listenerMap) return
 
-		val listener = KeyHintEditorKeyListener(editor)
+		val listener = KeyHintKeyListener(editor)
 		listenerMap[editor] = listener
 	}
 
@@ -84,20 +84,26 @@ class KeyHintEditorFactoryListener : EditorFactoryListener {
 
 	fun close() {
 		listenerMap.forEach { (_, listener) ->
-			if (listener != null) Disposer.dispose(listener)
+			Disposer.dispose(listener)
 		}
 		listenerMap.clear()
 	}
 }
 
-class KeyHintEditorKeyListener(private val editor: Editor) : Disposable {
+class KeyHintKeyListener(private val editor: Editor) : Disposable {
 
 	override fun dispose() {}
 
-	// ---- private ----
+	// -------- private --------
 
-	private var panel: HintListPanel? = null
-	private val analyzer = ShortcutAnalyzer(KeyHint.state.actionIdPattern.toRegex())
+	private val analyzer = run {
+		val regex = KeyHint.state.actionIdPattern.toRegex()
+		ShortcutAnalyzer { actionId ->
+			actionId !in ShortcutInlayRenderer.IMPLEMENTED_ACTIONS && regex.matches(actionId)
+		}
+	}
+	private val inlayRenderer = ShortcutInlayRenderer()
+	private val panelManager = HintListPanelManager(editor)
 
 	init {
 		IdeEventQueue.getInstance().addPreprocessor(
@@ -106,27 +112,28 @@ class KeyHintEditorKeyListener(private val editor: Editor) : Disposable {
 		)
 	}
 
-
 //	private val test = Test(editor)
 
-//	private fun updateTestState(e: KeyEvent) {
-//		if (e.id != KeyEvent.KEY_PRESSED || e.keyCode != KeyEvent.VK_SHIFT) return
-//		test.testInlayModel(editor)
-//	}
+	private fun updateTestState(e: KeyEvent) {
+		if (e.id != KeyEvent.KEY_PRESSED || e.keyCode != KeyEvent.VK_SHIFT) return
+//		test.testInlayModel()
+	}
 
 	private fun onKeyEvent(e: KeyEvent) {
-//		updateTestState(e)
+		updateTestState(e)
 		analyzer.onKeyEvent(e)
 		if (!analyzer.stateChanged()) return
 		when (analyzer.keyIntent()) {
 			ShortcutAnalyzer.KeyIntent.CharacterTyping -> {
-				panel?.close()
+				panelManager.close()
+				inlayRenderer.close()
 				return
 			}
 
 			ShortcutAnalyzer.KeyIntent.ShortcutPreparation,
 			ShortcutAnalyzer.KeyIntent.ShortcutComposition,
-			ShortcutAnalyzer.KeyIntent.ShortcutTriggered -> {}
+			ShortcutAnalyzer.KeyIntent.ShortcutTriggered -> {
+			}
 
 			ShortcutAnalyzer.KeyIntent.ShortcutAborted -> return
 		}
@@ -134,16 +141,7 @@ class KeyHintEditorKeyListener(private val editor: Editor) : Disposable {
 			.sortedWith(compareBy({ it.state.sortKey }, { -it.useCount }, { it.prettyDesc() }))
 			.map { it.prettyDesc() + ", " + it.actionId }
 			.toList()
-		updatePanel(list)
-	}
-
-	private fun updatePanel(list: List<String>) {
-		if (panel.nullOr { !it.isReusable() })
-			panel = HintListPanel(editor)
-
-		panel?.let { panel ->
-			panel.setTexts(list)
-			panel.setToCursorPosition(editor)
-		}
+		panelManager.showHint(list)
+		inlayRenderer.show(editor, KeymapManagerEx.getInstanceEx().activeKeymap)
 	}
 }

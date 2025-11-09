@@ -16,7 +16,7 @@ import java.awt.event.KeyEvent
  *
  * @property actionIdPattern 用于匹配编辑器动作的正则表达式，决定哪些动作会被纳入快捷键提示
  */
-class ShortcutAnalyzer(private var actionIdPattern: Regex) {
+class ShortcutAnalyzer(private var actionIdPredicate: (actionId: String) -> Boolean = { true }) {
 
 	// -------- Public API --------
 
@@ -33,15 +33,6 @@ class ShortcutAnalyzer(private var actionIdPattern: Regex) {
 	fun stateChanged(): Boolean = stateChanged.also { stateChanged = false }
 
 	fun keyIntent(): KeyIntent = keyIntent
-
-	/**
-	 * 更新动作ID匹配模式并重新加载快捷键配置
-	 * @param pattern 新的正则表达式模式
-	 */
-	fun setActionIdPattern(pattern: Regex) {
-		actionIdPattern = pattern
-		reload()
-	}
 
 	/**
 	 * 获取当前可用的快捷键提示序列
@@ -104,7 +95,10 @@ class ShortcutAnalyzer(private var actionIdPattern: Regex) {
 	 * 重新加载所有快捷键配置
 	 * 从当前活动的keymap中读取所有匹配的编辑器动作及其快捷键
 	 */
-	fun reload(keymap: Keymap = KeymapManagerEx.getInstanceEx().activeKeymap) {
+	fun reload(
+		keymap: Keymap = KeymapManagerEx.getInstanceEx().activeKeymap,
+		actionIdPattern: (actionId: String) -> Boolean = actionIdPredicate
+	) {
 		shortcutIndex = ShortcutIndex(keymap, actionIdPattern)
 	}
 
@@ -129,7 +123,7 @@ class ShortcutAnalyzer(private var actionIdPattern: Regex) {
 
 	// 静态数据结构
 
-	private var shortcutIndex = ShortcutIndex(actionIdPattern = actionIdPattern)
+	private var shortcutIndex = ShortcutIndex(actionIdPredicate = actionIdPredicate)
 
 	init {
 		reload()

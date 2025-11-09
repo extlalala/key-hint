@@ -15,6 +15,30 @@ import javax.swing.SwingUtilities
 import javax.swing.event.ListSelectionListener
 
 
+
+class HintListPanelManager(private val editor: Editor) {
+	fun showHint(list: List<String>) {
+		updatePanel(list)
+	}
+
+	fun close() {
+		panel?.close()
+		panel = null
+	}
+
+	private var panel: HintListPanel? = null
+
+	private fun updatePanel(list: List<String>) {
+		if (panel.nullOr { !it.isReusable() })
+			panel = HintListPanel(editor)
+
+		panel?.let { panel ->
+			panel.setTexts(list)
+			panel.setToCursorPosition(editor)
+		}
+	}
+}
+
 /**
  * A popup panel that displays a list of available keyboard shortcuts in an IntelliJ IDEA editor,
  * similar to code completion suggestions. The panel appears when a shortcut is pressed

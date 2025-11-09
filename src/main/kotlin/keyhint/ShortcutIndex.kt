@@ -52,14 +52,14 @@ class ShortcutEntry(val shortcut: KeyboardShortcut, val actionId: String) {
 
 class ShortcutIndex(
 	keymap: Keymap = KeymapManagerEx.getInstanceEx().activeKeymap,
-	private val actionIdPattern: Regex
+	actionIdPredicate: (actionId: String) -> Boolean = { true }
 ) {
 
 	// -------- Public API --------
 
 	fun findEntriesByExactKeyCodes(keyCodes: IntArray): List<ShortcutEntry>? = trie.findValueByExactMatch(keyCodes)
 
-	fun findEntriesByKeyCodePrefix(prefix: IntArray): Sequence<ShortcutEntry> = trie.findValueByPrefix(prefix).flatten()
+	fun findEntriesByKeyCodePrefix(prefix: IntArray): Sequence<ShortcutEntry> = trie.findValuesByPrefix(prefix).flatten()
 
 	// -------- Private Implementation --------
 
@@ -70,7 +70,7 @@ class ShortcutIndex(
 		val actionIdList = actionManager.getActionIdList("")
 
 		actionIdList.asSequence()
-			.filter { actionIdPattern.matches(it) }
+			.filter(actionIdPredicate)
 			.flatMap { actionId ->
 				keymap.getShortcuts(actionId).asSequence()
 					.map { shortcut -> shortcut to actionId }
