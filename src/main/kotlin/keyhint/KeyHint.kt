@@ -106,7 +106,16 @@ class KeyHintEditorKeyListener(private val editor: Editor) : Disposable {
 		)
 	}
 
+
+//	private val test = Test(editor)
+
+//	private fun updateTestState(e: KeyEvent) {
+//		if (e.id != KeyEvent.KEY_PRESSED || e.keyCode != KeyEvent.VK_SHIFT) return
+//		test.testInlayModel(editor)
+//	}
+
 	private fun onKeyEvent(e: KeyEvent) {
+//		updateTestState(e)
 		analyzer.onKeyEvent(e)
 		if (!analyzer.stateChanged()) return
 		when (analyzer.keyIntent()) {
@@ -115,16 +124,14 @@ class KeyHintEditorKeyListener(private val editor: Editor) : Disposable {
 				return
 			}
 
-			ShortcutAnalyzer.KeyIntent.ShortcutPreparation -> {}
-
-			ShortcutAnalyzer.KeyIntent.ShortcutComposition -> {}
-
+			ShortcutAnalyzer.KeyIntent.ShortcutPreparation,
+			ShortcutAnalyzer.KeyIntent.ShortcutComposition,
 			ShortcutAnalyzer.KeyIntent.ShortcutTriggered -> {}
 
 			ShortcutAnalyzer.KeyIntent.ShortcutAborted -> return
 		}
 		val list = analyzer.currentShortcuts()
-			.sortedWith(compareBy({ -it.useCount }, { it.prettyDesc() }))
+			.sortedWith(compareBy({ it.state.sortKey }, { -it.useCount }, { it.prettyDesc() }))
 			.map { it.prettyDesc() + ", " + it.actionId }
 			.toList()
 		updatePanel(list)
