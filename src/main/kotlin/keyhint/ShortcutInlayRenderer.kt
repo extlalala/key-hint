@@ -12,6 +12,7 @@ import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.openapi.keymap.KeymapUtil
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.JBColor
+import keyhint.utils.ConfigurationBuilder
 import java.awt.BasicStroke
 import java.awt.Color
 import java.awt.Font
@@ -29,6 +30,7 @@ class ShortcutInlayRenderer {
 
 	fun show(editor: Editor, keymap: Keymap) {
 		close()
+		val config = KeyHint.state.shortcutInlayRenderer
 		if (!config.enabled) return
 
 		this.keymap = keymap
@@ -47,6 +49,12 @@ class ShortcutInlayRenderer {
 
 		if (config.renderEditorLineStartAndEnd)
 			renderRange(lineRange(editor), display(EDITOR_LINE_START), display(EDITOR_LINE_END), inlayModel)
+
+		if (config.renderEditorPageDownAndUp)
+			renderRange(pageUpDownRange(editor), display(EDITOR_PAGE_UP), display(EDITOR_PAGE_DOWN), inlayModel)
+
+		if (config.renderEditorNextAndPreviousWord)
+			renderRange(nextPrevWordRange(editor), display(EDITOR_PREVIOUS_WORD), display(EDITOR_NEXT_WORD), inlayModel)
 	}
 
 	fun close() {
@@ -56,13 +64,31 @@ class ShortcutInlayRenderer {
 
 	class Config {
 		var enabled = true
+
+		var showWithSelectionForms = true
+		var selectionModifierKey = "shift"
+
 		var renderEditorCodeBlockStartAndEnd = true
 		var renderEditorMoveToPageBottomAndTop = true
 		var renderEditorTextStartAndEnd = true
 		var renderEditorLineStartAndEnd = true
-	}
+		var renderEditorPageDownAndUp = true
+		var renderEditorNextAndPreviousWord = false
 
-	val config = Config()
+		companion object {
+			val configuration = ConfigurationBuilder<Config>()
+				.boolean("enabled", Config::enabled)
+				.boolean("showWithSelectionForms", Config::showWithSelectionForms)
+				.string("selectionModifierKey", Config::selectionModifierKey)
+				.boolean("renderEditorCodeBlockStartAndEnd", Config::renderEditorCodeBlockStartAndEnd)
+				.boolean("renderEditorMoveToPageBottomAndTop", Config::renderEditorMoveToPageBottomAndTop)
+				.boolean("renderEditorTextStartAndEnd", Config::renderEditorTextStartAndEnd)
+				.boolean("renderEditorLineStartAndEnd", Config::renderEditorLineStartAndEnd)
+				.boolean("renderEditorPageDownAndUp", Config::renderEditorPageDownAndUp)
+				.boolean("renderEditorNextAndPreviousWord", Config::renderEditorNextAndPreviousWord)
+				.build()
+		}
+	}
 
 	// -------- Private Implementation ----------
 
@@ -75,7 +101,17 @@ class ShortcutInlayRenderer {
 	}
 
 	private fun display(actionId: String): String {
-		return keymap.getShortcuts(actionId).joinToString(separator = ", ") { KeymapUtil.getShortcutText(it) }
+		val config = KeyHint.state.shortcutInlayRenderer
+		val showWithSelectionForms = config.showWithSelectionForms
+		val selectionModifier = config.selectionModifierKey
+		return keymap.getShortcuts(actionId).joinToString(separator = ", ") { shortcut ->
+			val suffix = if (!showWithSelectionForms) {
+				""
+			} else {
+				" (+$selectionModifier)"
+			}
+			KeymapUtil.getShortcutText(shortcut) + suffix
+		}
 	}
 
 	private fun drawInlay(offset: Int, s: String, inlayModel: InlayModel) {
@@ -93,16 +129,24 @@ class ShortcutInlayRenderer {
 		const val EDITOR_TEXT_END = "EditorTextEnd"
 		const val EDITOR_LINE_START = "EditorLineStart"
 		const val EDITOR_LINE_END = "EditorLineEnd"
+		const val EDITOR_PAGE_DOWN = "EditorPageDown"
+		const val EDITOR_PAGE_UP = "EditorPageUp"
+		const val EDITOR_NEXT_WORD = "EditorNextWord"
+		const val EDITOR_PREVIOUS_WORD = "EditorPreviousWord"
 
 		val IMPLEMENTED_ACTIONS = setOf(
-			EDITOR_CODE_BLOCK_START,
-			EDITOR_CODE_BLOCK_END,
-			EDITOR_MOVE_TO_PAGE_TOP,
-			EDITOR_MOVE_TO_PAGE_BOTTOM,
-			EDITOR_TEXT_START,
-			EDITOR_TEXT_END,
-			EDITOR_LINE_START,
-			EDITOR_LINE_END
+			EDITOR_CODE_BLOCK_START, "${EDITOR_CODE_BLOCK_START}WithSelection",
+			EDITOR_CODE_BLOCK_END, "${EDITOR_CODE_BLOCK_END}WithSelection",
+			EDITOR_MOVE_TO_PAGE_TOP, "${EDITOR_MOVE_TO_PAGE_TOP}WithSelection",
+			EDITOR_MOVE_TO_PAGE_BOTTOM, "${EDITOR_MOVE_TO_PAGE_BOTTOM}WithSelection",
+			EDITOR_TEXT_START, "${EDITOR_TEXT_START}WithSelection",
+			EDITOR_TEXT_END, "${EDITOR_TEXT_END}WithSelection",
+			EDITOR_LINE_START, "${EDITOR_LINE_START}WithSelection",
+			EDITOR_LINE_END, "${EDITOR_LINE_END}WithSelection",
+			EDITOR_PAGE_DOWN, "${EDITOR_PAGE_DOWN}WithSelection",
+			EDITOR_PAGE_UP, "${EDITOR_PAGE_UP}WithSelection",
+			EDITOR_NEXT_WORD, "${EDITOR_NEXT_WORD}WithSelection",
+			EDITOR_PREVIOUS_WORD, "${EDITOR_PREVIOUS_WORD}WithSelection",
 		)
 	}
 }
@@ -186,47 +230,51 @@ private class MyEditorCustomElementRenderer(
 }
 
 /*
-
-
+Shift+Page Down - Page Down with Selection                  EditorPageDownWithSelection
+Shift+Page Up - Page Up with Selection                      EditorPageUpWithSelection
 
 Ctrl+Shift+���Ҽ�ͷ - Move Caret to Next Word with Selection    EditorNextWordWithSelection
-Ctrl+Backspace - Delete to Word Start                       EditorDeleteToWordStart
-Ctrl+Enter - Split Line                                     EditorSplitLine
+Ctrl+���Ҽ�ͷ - Move Caret to Next Word                         EditorNextWord
+Ctrl+�����ͷ - Move Caret to Previous Word                EditorPreviousWord
+Ctrl+Shift+�����ͷ - Move Caret to Previous Word with SelectionEditorPreviousWordWithSelection
+
+
+
+Ctrl+Shift+[ - Move Caret to Code Block Start with Selection EditorCodeBlockStartWithSelection
+Ctrl+Shift+] - Move Caret to Code Block End with Selection  EditorCodeBlockEndWithSelection
+Ctrl+Shift+Home - Move Caret to Text Start with Selection   EditorTextStartWithSelection
 Ctrl+Shift+End - Move Caret to Text End with Selection      EditorTextEndWithSelection
-Shift+���ϼ�ͷ - Up with Selection                              EditorUpWithSelection
-Ctrl+���ϼ�ͷ - Scroll Up                                       EditorScrollUp
+Shift+Home - Move Caret to Line Start with Selection        EditorLineStartWithSelection
 Shift+End - Move Caret to Line End with Selection           EditorLineEndWithSelection
 Ctrl+Shift+Page Up - Move Caret to Page Top with Selection  EditorMoveToPageTopWithSelection
-Shift+Home - Move Caret to Line Start with Selection        EditorLineStartWithSelection
+Ctrl+Shift+Page Down - Move Caret to Page Bottom with Selection EditorMoveToPageBottomWithSelection
+
+
+
+Ctrl+Backspace - Delete to Word Start                       EditorDeleteToWordStart
+Ctrl+Enter - Split Line                                     EditorSplitLine
+Shift+���ϼ�ͷ - Up with Selection                              EditorUpWithSelection
+Ctrl+���ϼ�ͷ - Scroll Up                                       EditorScrollUp
 Ctrl+D - Duplicate Line or Selection                        EditorDuplicate
-Ctrl+Shift+[ - Move Caret to Code Block Start with SelectionEditorCodeBlockStartWithSelection
 Ctrl+Shift+M - Move Caret to Matching Brace                 EditorMatchBrace
 Ctrl+���¼�ͷ - Scroll Down                                     EditorScrollDown
 Ctrl+���¼�ͷ - Lookup Down                                     EditorLookupDown
 Ctrl+Y - Delete Line                                        EditorDeleteLine
 Ctrl+M - Scroll to Center                                   EditorScrollToCenter
-Ctrl+Shift+] - Move Caret to Code Block End with Selection  EditorCodeBlockEndWithSelection
 Ctrl+Shift+Enter - Complete Current Statement               EditorCompleteStatement
 Ctrl+Shift+J - Join Lines                                   EditorJoinLines
-Ctrl+���Ҽ�ͷ - Move Caret to Next Word                         EditorNextWord
 Shift+Tab - Unindent Line or Selection                      EditorUnindentSelection
-Shift+Page Down - Page Down with Selection                  EditorPageDownWithSelection
 Ctrl+Alt+Enter - Start New Line Before Current              EditorStartNewLineBefore
-Shift+Page Up - Page Up with Selection                      EditorPageUpWithSelection
-Ctrl+Shift+Home - Move Caret to Text Start with Selection   EditorTextStartWithSelection
 Alt+Shift+Insert - Column Selection Mode                    EditorToggleColumnMode
 Ctrl+Delete - Delete to Word End                            EditorDeleteToWordEnd
 Shift+���¼�ͷ - Down with Selection                            EditorDownWithSelection
 Ctrl+���ϼ�ͷ - Lookup Up                                       EditorLookupUp
 Alt+Shift+G - Add Carets to Ends of Selected Lines          EditorAddCaretPerSelectedLine
-Ctrl+Shift+�����ͷ - Move Caret to Previous Word with SelectionEditorPreviousWordWithSelection
-Ctrl+Shift+Page Down - Move Caret to Page Bottom with SelectionEditorMoveToPageBottomWithSelection
 Shift+Enter - Start New Line                                EditorStartNewLine
 Ctrl+W - Extend Selection                                   EditorSelectWord
 Ctrl+X - Cut                                                EditorCut
 Ctrl+Shift+W - Shrink Selection                             EditorUnSelectWord
 Shift+Delete - Cut                                          EditorCut
-Ctrl+�����ͷ - Move Caret to Previous Word                EditorPreviousWord
 
 
 

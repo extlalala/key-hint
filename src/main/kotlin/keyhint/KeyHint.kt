@@ -30,9 +30,8 @@ class KeyHintListenerRegistrar : AppLifecycleListener, DynamicPluginListener {
 	}
 
 	override fun pluginLoaded(pluginDescriptor: IdeaPluginDescriptor) {
-		if (pluginDescriptor.pluginId.idString == "zl.key-lister") {
+		if (pluginDescriptor.pluginId.idString == "zl.key-lister")
 			KeyHint.initialize()
-		}
 	}
 }
 
@@ -40,14 +39,13 @@ val KeyHint: KeyHintService get() = ApplicationManager.getApplication().getServi
 
 class KeyHintState {
 	var actionIdPattern: String = ".*Editor.*"
+	var actionIdBlockedList: Set<String> = mutableSetOf()
+	var shortcutInlayRenderer: ShortcutInlayRenderer.Config = ShortcutInlayRenderer.Config()
 }
 
 @Service
 @State(name = "KeyHint", storages = [Storage("key-hint.xml")])
 class KeyHintService : PersistentStateComponent<KeyHintState>, Disposable {
-	private var listener: KeyHintEditorFactoryListener? = null
-	private val state = KeyHintState()
-
 	override fun getState(): KeyHintState = state
 	override fun loadState(state: KeyHintState) {
 		this.state.actionIdPattern = state.actionIdPattern
@@ -63,6 +61,15 @@ class KeyHintService : PersistentStateComponent<KeyHintState>, Disposable {
 	override fun dispose() {
 		listener?.close()
 	}
+
+	fun stateChanged() {
+		listener?.stateChanged()
+	}
+
+	// -------- private --------
+
+	private var listener: KeyHintEditorFactoryListener? = null
+	private val state = KeyHintState()
 }
 
 class KeyHintEditorFactoryListener : EditorFactoryListener {
@@ -88,20 +95,25 @@ class KeyHintEditorFactoryListener : EditorFactoryListener {
 		}
 		listenerMap.clear()
 	}
+
+	fun stateChanged() {
+		listenerMap.forEach { (_, listener) ->
+			listener.stateChanged()
+		}
+	}
 }
 
 class KeyHintKeyListener(private val editor: Editor) : Disposable {
 
 	override fun dispose() {}
 
+	fun stateChanged() {
+		analyzer = createAnalyzer()
+	}
+
 	// -------- private --------
 
-	private val analyzer = run {
-		val regex = KeyHint.state.actionIdPattern.toRegex()
-		ShortcutAnalyzer { actionId ->
-			actionId !in ShortcutInlayRenderer.IMPLEMENTED_ACTIONS && regex.matches(actionId)
-		}
-	}
+	private var analyzer = createAnalyzer()
 	private val inlayRenderer = ShortcutInlayRenderer()
 	private val panelManager = HintListPanelManager(editor)
 
@@ -143,5 +155,15 @@ class KeyHintKeyListener(private val editor: Editor) : Disposable {
 			.toList()
 		panelManager.showHint(list)
 		inlayRenderer.show(editor, KeymapManagerEx.getInstanceEx().activeKeymap)
+	}
+
+	private fun createAnalyzer(): ShortcutAnalyzer {
+		val config = KeyHint.state
+		val regex = config.actionIdPattern.toRegex()
+		return ShortcutAnalyzer { actionId ->
+			actionId !in ShortcutInlayRenderer.IMPLEMENTED_ACTIONS
+					&& actionId !in config.actionIdBlockedList
+					&& regex.matches(actionId)
+		}
 	}
 }

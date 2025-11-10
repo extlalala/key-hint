@@ -8,6 +8,7 @@ import com.intellij.openapi.ui.popup.LightweightWindowEvent
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
+import keyhint.utils.nullOr
 import java.awt.Dimension
 import javax.swing.BorderFactory
 import javax.swing.JPanel

@@ -6,6 +6,7 @@ import com.intellij.openapi.keymap.Keymap
 import com.intellij.openapi.keymap.KeymapUtil
 import com.intellij.openapi.keymap.ex.KeymapManagerEx
 import it.unimi.dsi.fastutil.ints.IntArrayList
+import keyhint.utils.IntValueTrie
 import java.awt.event.KeyEvent
 import javax.swing.KeyStroke
 
