@@ -24,37 +24,24 @@ import java.awt.geom.RoundRectangle2D
  * 用于在跳转快捷键的目标位置显示提示信息, 提示快捷键键位
  */
 
-class ShortcutInlayRenderer {
+class ShortcutInlayRenderer(private val extraHintListener: ExtraHintListener) {
 
 	// -------- Public API ----------
 
-	fun show(editor: Editor, keymap: Keymap) {
+	fun reload(keymap: Keymap = KeymapManager.getInstance().activeKeymap) {
+		loadEntries(keymap)
+	}
+
+	fun show(editor: Editor) {
 		close()
 		val config = KeyHint.state.shortcutInlayRenderer
-		if (!config.enabled) return
+		if (!config.inlayHintEnabled) return
 
-		this.keymap = keymap
 		val inlayModel = editor.inlayModel
 
-		if (config.renderEditorCodeBlockStartAndEnd)
-			codeBlockRange(editor)?.let {
-				renderRange(it, display(EDITOR_CODE_BLOCK_START), display(EDITOR_CODE_BLOCK_END), inlayModel)
-			}
-
-		if (config.renderEditorMoveToPageBottomAndTop)
-			renderRange(pageRange(editor), display(EDITOR_MOVE_TO_PAGE_BOTTOM), display(EDITOR_MOVE_TO_PAGE_TOP), inlayModel)
-
-		if (config.renderEditorTextStartAndEnd)
-			renderRange(0..editor.document.textLength, display(EDITOR_TEXT_START), display(EDITOR_TEXT_END), inlayModel)
-
-		if (config.renderEditorLineStartAndEnd)
-			renderRange(lineRange(editor), display(EDITOR_LINE_START), display(EDITOR_LINE_END), inlayModel)
-
-		if (config.renderEditorPageDownAndUp)
-			renderRange(pageUpDownRange(editor), display(EDITOR_PAGE_UP), display(EDITOR_PAGE_DOWN), inlayModel)
-
-		if (config.renderEditorNextAndPreviousWord)
-			renderRange(nextPrevWordRange(editor), display(EDITOR_PREVIOUS_WORD), display(EDITOR_NEXT_WORD), inlayModel)
+		val renderEntries = mutableListOf<ExtraHintListener.RenderEntry>()
+		inlayRenderEntries.forEach { entry -> renderEntry(entry, editor, inlayModel, renderEntries) }
+		extraHintListener.render(renderEntries)
 	}
 
 	fun close() {
@@ -63,106 +50,172 @@ class ShortcutInlayRenderer {
 	}
 
 	class Config {
-		var enabled = true
+		var inlayHintEnabled = true
 
-		var showWithSelectionForms = true
+		var showSelectionVariants = true
 		var selectionModifierKey = "shift"
 
-		var renderEditorCodeBlockStartAndEnd = true
-		var renderEditorMoveToPageBottomAndTop = true
-		var renderEditorTextStartAndEnd = true
-		var renderEditorLineStartAndEnd = true
-		var renderEditorPageDownAndUp = true
-		var renderEditorNextAndPreviousWord = false
+		var codeBlockStartAndEnd: RenderMode? = RenderMode.Full
+		var moveToPageBottomAndTop: RenderMode? = RenderMode.Full
+		var textStartAndEnd: RenderMode? = RenderMode.Full
+		var lineStartAndEnd: RenderMode? = RenderMode.Simplified
+		var pageDownAndUp: RenderMode? = RenderMode.Full
+		var nextAndPreviousWord: RenderMode? = RenderMode.Simplified
+
+		var codeBlockStartAndEndColor: String = "#4D97FF"
+		var moveToPageBottomAndTopColor: String = "#666666"
+		var textStartAndEndColor: String = "#FFA726"
+		var lineStartAndEndColor: String = "#BA68C8"
+		var pageDownAndUpColor: String = "#66BB6A"
+		var nextAndPreviousWordColor: String = "#FFCA28"
+
+		enum class RenderMode {
+			Disabled,
+			Simplified,
+			Full
+		}
 
 		companion object {
 			val configuration = ConfigurationBuilder<Config>()
-				.boolean("enabled", Config::enabled)
-				.boolean("showWithSelectionForms", Config::showWithSelectionForms)
-				.string("selectionModifierKey", Config::selectionModifierKey)
-				.boolean("renderEditorCodeBlockStartAndEnd", Config::renderEditorCodeBlockStartAndEnd)
-				.boolean("renderEditorMoveToPageBottomAndTop", Config::renderEditorMoveToPageBottomAndTop)
-				.boolean("renderEditorTextStartAndEnd", Config::renderEditorTextStartAndEnd)
-				.boolean("renderEditorLineStartAndEnd", Config::renderEditorLineStartAndEnd)
-				.boolean("renderEditorPageDownAndUp", Config::renderEditorPageDownAndUp)
-				.boolean("renderEditorNextAndPreviousWord", Config::renderEditorNextAndPreviousWord)
+				.boolean(Config::inlayHintEnabled)
+				.boolean(Config::showSelectionVariants)
+				.string(Config::selectionModifierKey)
+				.subConfig("renderMode")
+				.enum(Config::codeBlockStartAndEnd, RenderMode.Full)
+				.enum(Config::moveToPageBottomAndTop, RenderMode.Full)
+				.enum(Config::textStartAndEnd, RenderMode.Full)
+				.enum(Config::lineStartAndEnd, RenderMode.Full)
+				.enum(Config::pageDownAndUp, RenderMode.Full)
+				.enum(Config::nextAndPreviousWord, RenderMode.Simplified)
+				.endSubConfig()
+				.subConfig("colors")
+				.string(Config::codeBlockStartAndEndColor)
+				.string(Config::moveToPageBottomAndTopColor)
+				.string(Config::textStartAndEndColor)
+				.string(Config::lineStartAndEndColor)
+				.string(Config::pageDownAndUpColor)
+				.string(Config::nextAndPreviousWordColor)
+				.endSubConfig()
 				.build()
 		}
 	}
 
-	// -------- Private Implementation ----------
+	enum class MoveAction(val actionIdLo: String, val actionIdHi: String) {
+		EDITOR_MOVE_CODE_BLOCK("EditorCodeBlockStart", "EditorCodeBlockEnd"),
+		EDITOR_MOVE_MOVE_TO_PAGE("EditorMoveToPageTop", "EditorMoveToPageBottom"),
+		EDITOR_MOVE_TEXT("EditorTextStart", "EditorTextEnd"),
+		EDITOR_MOVE_LINE("EditorLineStart", "EditorLineEnd"),
+		EDITOR_MOVE_PAGE("EditorPageUp", "EditorPageDown"),
+		EDITOR_MOVE_WORD("EditorNextWord", "EditorPreviousWord");
 
-	private val inlays = mutableListOf<Inlay<*>>()
-	private var keymap = KeymapManager.getInstance().activeKeymap
-
-	private fun renderRange(range: IntRange, lowDisplay: String, highDisplay: String, inlayModel: InlayModel) {
-		drawInlay(range.first, lowDisplay, inlayModel)
-		drawInlay(range.last, highDisplay, inlayModel)
+		companion object {
+			val allActionIds = MoveAction.entries.asSequence()
+				.flatMap { listOf(it.actionIdLo, it.actionIdHi) }
+				.flatMap { listOf(it, "${it}WithSelection") }
+				.toSet()
+		}
 	}
 
-	private fun display(actionId: String): String {
+	fun interface ExtraHintListener {
+		data class RenderEntry(val action: MoveAction, val display: Pair<String, String>, val color: Color)
+
+		fun render(entries: List<RenderEntry>)
+	}
+
+	// -------- Private Implementation ----------
+
+	private class InlayRenderEntry(
+		val action: MoveAction,
+		val color: Color,
+		val renderInExtraWindow: Boolean,
+		val simplified: Boolean,
+		val displayTextLo: String,
+		val displayTextHi: String,
+		val calcRange: (Editor) -> IntRange?
+	)
+
+	private val inlayRenderEntries = mutableListOf<InlayRenderEntry>()
+	private val inlays = mutableListOf<Inlay<*>>()
+
+	init {
+		loadEntries(KeymapManager.getInstance().activeKeymap)
+	}
+
+	private fun loadEntries(keymap: Keymap) {
+		inlayRenderEntries.clear()
+
 		val config = KeyHint.state.shortcutInlayRenderer
-		val showWithSelectionForms = config.showWithSelectionForms
+
+		fun addEntry(action: MoveAction, color: Color, mode: Config.RenderMode?, calcRange: (Editor) -> IntRange?) {
+			when (mode) {
+				ShortcutInlayRenderer.Config.RenderMode.Disabled -> null
+				ShortcutInlayRenderer.Config.RenderMode.Simplified -> InlayRenderEntry(action, color, true, true, display(action.actionIdLo, keymap), display(action.actionIdHi, keymap), calcRange)
+				null, ShortcutInlayRenderer.Config.RenderMode.Full -> InlayRenderEntry(action, color, false, false, display(action.actionIdLo, keymap), display(action.actionIdHi, keymap), calcRange)
+			}
+				?.let { inlayRenderEntries += it }
+		}
+
+		addEntry(MoveAction.EDITOR_MOVE_CODE_BLOCK, toColor(config.codeBlockStartAndEndColor), config.codeBlockStartAndEnd, ::codeBlockRange)
+		addEntry(MoveAction.EDITOR_MOVE_MOVE_TO_PAGE, toColor(config.moveToPageBottomAndTopColor), config.moveToPageBottomAndTop, ::pageRange)
+		addEntry(MoveAction.EDITOR_MOVE_TEXT, toColor(config.textStartAndEndColor), config.textStartAndEnd) { 0..it.document.textLength }
+		addEntry(MoveAction.EDITOR_MOVE_LINE, toColor(config.lineStartAndEndColor), config.lineStartAndEnd, ::lineRange)
+		addEntry(MoveAction.EDITOR_MOVE_PAGE, toColor(config.pageDownAndUpColor), config.pageDownAndUp, ::pageUpDownRange)
+		addEntry(MoveAction.EDITOR_MOVE_WORD, toColor(config.nextAndPreviousWordColor), config.nextAndPreviousWord, ::nextPrevWordRange)
+	}
+
+	private fun toColor(colorString: String): Color =
+		try {
+			Color.decode(colorString)
+		} catch (e: NumberFormatException) {
+			JBColor.BLUE
+		}
+
+	private fun display(actionId: String, keymap: Keymap): String {
+		val config = KeyHint.state.shortcutInlayRenderer
+		val showWithSelectionForms = config.showSelectionVariants
 		val selectionModifier = config.selectionModifierKey
 		return keymap.getShortcuts(actionId).joinToString(separator = ", ") { shortcut ->
-			val suffix = if (!showWithSelectionForms) {
-				""
-			} else {
+			val suffix = if (showWithSelectionForms) {
 				" (+$selectionModifier)"
+			} else {
+				""
 			}
 			KeymapUtil.getShortcutText(shortcut) + suffix
 		}
 	}
 
-	private fun drawInlay(offset: Int, s: String, inlayModel: InlayModel) {
-		val renderer = MyEditorCustomElementRenderer(s)
-		inlayModel.addInlineElement(offset, renderer)
-			?.let { inlays.add(it) }
+	private fun renderEntry(entry: InlayRenderEntry, editor: Editor, inlayModel: InlayModel, renderEntries: MutableList<ExtraHintListener.RenderEntry>) {
+		val range = entry.calcRange(editor)
+			?.takeIf { it.first != it.last }
+			?: return
+
+		val lo = if (entry.simplified) "|" else entry.displayTextLo
+		val hi = if (entry.simplified) "|" else entry.displayTextHi
+		drawInlay(range.first, lo, entry.color, inlayModel)
+		drawInlay(range.last, hi, entry.color, inlayModel)
+
+		if (entry.renderInExtraWindow)
+			renderEntries += ExtraHintListener.RenderEntry(entry.action, entry.displayTextLo to entry.displayTextHi, entry.color)
 	}
 
-	companion object {
-		const val EDITOR_CODE_BLOCK_START = "EditorCodeBlockStart"
-		const val EDITOR_CODE_BLOCK_END = "EditorCodeBlockEnd"
-		const val EDITOR_MOVE_TO_PAGE_TOP = "EditorMoveToPageTop"
-		const val EDITOR_MOVE_TO_PAGE_BOTTOM = "EditorMoveToPageBottom"
-		const val EDITOR_TEXT_START = "EditorTextStart"
-		const val EDITOR_TEXT_END = "EditorTextEnd"
-		const val EDITOR_LINE_START = "EditorLineStart"
-		const val EDITOR_LINE_END = "EditorLineEnd"
-		const val EDITOR_PAGE_DOWN = "EditorPageDown"
-		const val EDITOR_PAGE_UP = "EditorPageUp"
-		const val EDITOR_NEXT_WORD = "EditorNextWord"
-		const val EDITOR_PREVIOUS_WORD = "EditorPreviousWord"
-
-		val IMPLEMENTED_ACTIONS = setOf(
-			EDITOR_CODE_BLOCK_START, "${EDITOR_CODE_BLOCK_START}WithSelection",
-			EDITOR_CODE_BLOCK_END, "${EDITOR_CODE_BLOCK_END}WithSelection",
-			EDITOR_MOVE_TO_PAGE_TOP, "${EDITOR_MOVE_TO_PAGE_TOP}WithSelection",
-			EDITOR_MOVE_TO_PAGE_BOTTOM, "${EDITOR_MOVE_TO_PAGE_BOTTOM}WithSelection",
-			EDITOR_TEXT_START, "${EDITOR_TEXT_START}WithSelection",
-			EDITOR_TEXT_END, "${EDITOR_TEXT_END}WithSelection",
-			EDITOR_LINE_START, "${EDITOR_LINE_START}WithSelection",
-			EDITOR_LINE_END, "${EDITOR_LINE_END}WithSelection",
-			EDITOR_PAGE_DOWN, "${EDITOR_PAGE_DOWN}WithSelection",
-			EDITOR_PAGE_UP, "${EDITOR_PAGE_UP}WithSelection",
-			EDITOR_NEXT_WORD, "${EDITOR_NEXT_WORD}WithSelection",
-			EDITOR_PREVIOUS_WORD, "${EDITOR_PREVIOUS_WORD}WithSelection",
-		)
+	private fun drawInlay(offset: Int, s: String, color: Color, inlayModel: InlayModel) {
+		val renderer = MyEditorCustomElementRenderer(s, color)
+		inlayModel.addInlineElement(offset, renderer)
+			?.let { inlays.add(it) }
 	}
 }
 
 private class MyEditorCustomElementRenderer(
-	val s: String
+	val s: String,
+	val color: Color
 ) : EditorCustomElementRenderer {
 	private val config = object {
-		val textColor: Color = JBColor.BLUE
 		val backgroundColor: Color? = null // 可设置为浅蓝色背景增强可读性
 		val font: Font = EditorColorsManager.getInstance().globalScheme.getFont(EditorFontType.PLAIN)
-		val verticalPadding = 2
-		val horizontalPadding = 4
 		val borderColor: Color? = JBColor.GRAY
 		val borderWidth = 1f
 		val cornerRadius = 3f
+		val verticalPadding = 2f
 	}
 
 	override fun paint(inlay: Inlay<*>, g: Graphics2D, targetRegion: Rectangle2D, textAttributes: TextAttributes) {
@@ -179,34 +232,26 @@ private class MyEditorCustomElementRenderer(
 			val textWidth = fontMetrics.stringWidth(s)
 			val textHeight = fontMetrics.ascent
 
-			// 计算带内边距的元素尺寸
-			val elementWidth = textWidth + config.horizontalPadding * 2f
-			val elementHeight = textHeight + config.verticalPadding * 2f
-
 			// 计算绘制位置（居中）
 			val x = targetRegion.x.toFloat()
-			val y = targetRegion.y.toFloat() + (targetRegion.height.toFloat() - elementHeight) / 2
+			val y = targetRegion.y.toFloat() + (targetRegion.height.toFloat() - textHeight) / 2 - config.verticalPadding
 
 			// 绘制背景（如果有）
 			config.backgroundColor?.let {
 				g.color = it
-				fillRoundRect(g, x, y, elementWidth, elementHeight, config.cornerRadius)
+				fillRoundRect(g, x, y, textWidth.toFloat(), textHeight.toFloat() + 2 * config.verticalPadding, config.cornerRadius)
 			}
 
 			// 绘制边框（如果有）
 			config.borderColor?.let {
 				g.color = it
 				g.stroke = BasicStroke(config.borderWidth)
-				drawRoundRect(g, x, y, elementWidth, elementHeight, config.cornerRadius)
+				drawRoundRect(g, x, y, textWidth.toFloat(), textHeight.toFloat() + 2 * config.verticalPadding, config.cornerRadius)
 			}
 
 			// 绘制文本
-			g.color = config.textColor
-			g.drawString(
-				s,
-				x + config.horizontalPadding,
-				y + config.verticalPadding + textHeight
-			)
+			g.color = color
+			g.drawString(s, x, targetRegion.y.toFloat() + targetRegion.height.toFloat() - textHeight / 2)
 		} finally {
 			// 恢复原始图形状态
 			g.transform = originalTransform
@@ -217,7 +262,7 @@ private class MyEditorCustomElementRenderer(
 
 	override fun calcWidthInPixels(inlay: Inlay<*>): Int {
 		val fontMetrics = inlay.editor.contentComponent.getFontMetrics(config.font)
-		return fontMetrics.stringWidth(s) + config.horizontalPadding * 2
+		return fontMetrics.stringWidth(s)
 	}
 
 	private fun drawRoundRect(g: Graphics2D, x: Float, y: Float, width: Float, height: Float, radius: Float) {
@@ -230,25 +275,7 @@ private class MyEditorCustomElementRenderer(
 }
 
 /*
-Shift+Page Down - Page Down with Selection                  EditorPageDownWithSelection
-Shift+Page Up - Page Up with Selection                      EditorPageUpWithSelection
-
-Ctrl+Shift+���Ҽ�ͷ - Move Caret to Next Word with Selection    EditorNextWordWithSelection
-Ctrl+���Ҽ�ͷ - Move Caret to Next Word                         EditorNextWord
-Ctrl+�����ͷ - Move Caret to Previous Word                EditorPreviousWord
-Ctrl+Shift+�����ͷ - Move Caret to Previous Word with SelectionEditorPreviousWordWithSelection
-
-
-
-Ctrl+Shift+[ - Move Caret to Code Block Start with Selection EditorCodeBlockStartWithSelection
-Ctrl+Shift+] - Move Caret to Code Block End with Selection  EditorCodeBlockEndWithSelection
-Ctrl+Shift+Home - Move Caret to Text Start with Selection   EditorTextStartWithSelection
-Ctrl+Shift+End - Move Caret to Text End with Selection      EditorTextEndWithSelection
-Shift+Home - Move Caret to Line Start with Selection        EditorLineStartWithSelection
-Shift+End - Move Caret to Line End with Selection           EditorLineEndWithSelection
-Ctrl+Shift+Page Up - Move Caret to Page Top with Selection  EditorMoveToPageTopWithSelection
-Ctrl+Shift+Page Down - Move Caret to Page Bottom with Selection EditorMoveToPageBottomWithSelection
-
+Ctrl+M - Scroll to Center                                   EditorScrollToCenter
 
 
 Ctrl+Backspace - Delete to Word Start                       EditorDeleteToWordStart
@@ -260,7 +287,6 @@ Ctrl+Shift+M - Move Caret to Matching Brace                 EditorMatchBrace
 Ctrl+���¼�ͷ - Scroll Down                                     EditorScrollDown
 Ctrl+���¼�ͷ - Lookup Down                                     EditorLookupDown
 Ctrl+Y - Delete Line                                        EditorDeleteLine
-Ctrl+M - Scroll to Center                                   EditorScrollToCenter
 Ctrl+Shift+Enter - Complete Current Statement               EditorCompleteStatement
 Ctrl+Shift+J - Join Lines                                   EditorJoinLines
 Shift+Tab - Unindent Line or Selection                      EditorUnindentSelection

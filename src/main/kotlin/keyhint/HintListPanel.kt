@@ -9,36 +9,47 @@ import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import keyhint.utils.nullOr
+import java.awt.BorderLayout
+import java.awt.Color
+import java.awt.Component
 import java.awt.Dimension
 import javax.swing.BorderFactory
+import javax.swing.DefaultListCellRenderer
+import javax.swing.JList
 import javax.swing.JPanel
+import javax.swing.ListSelectionModel
 import javax.swing.SwingUtilities
 import javax.swing.event.ListSelectionListener
 
 
 
-class HintListPanelManager(private val editor: Editor) {
-	fun showHint(list: List<String>) {
+class HintListPanelManager(
+	private val editor: Editor,
+	private val setPosition: (Editor, JBPopup) -> Unit
+) {
+	fun show(list: List<DecoratedText>) {
 		updatePanel(list)
 	}
 
-	fun close() {
+	fun hide() {
 		panel?.close()
 		panel = null
 	}
 
 	private var panel: HintListPanel? = null
 
-	private fun updatePanel(list: List<String>) {
+	private fun updatePanel(list: List<DecoratedText>) {
 		if (panel.nullOr { !it.isReusable() })
 			panel = HintListPanel(editor)
 
 		panel?.let { panel ->
 			panel.setTexts(list)
-			panel.setToCursorPosition(editor)
+			setPosition(editor, panel.hint)
 		}
 	}
 }
+
+data class DecoratedText(val text: String, val color: Color? = null)
 
 /**
  * A popup panel that displays a list of available keyboard shortcuts in an IntelliJ IDEA editor,
@@ -61,7 +72,7 @@ class HintListPanel(editor: Editor) {
 	 *
 	 * @param list The new list of shortcut descriptions to display
 	 */
-	fun setTexts(list: List<String>) {
+	fun setTexts(list: List<DecoratedText>) {
 		SwingUtilities.invokeLater {
 			this.list.setListData(list.toTypedArray())
 			if (this.list.model.size > 0)
@@ -108,11 +119,25 @@ class HintListPanel(editor: Editor) {
 
 	// -------- Private Implementation --------
 
+	private class DecoratedTextListCellRenderer : DefaultListCellRenderer() {
+		override fun getListCellRendererComponent(list: JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean): Component {
+			if (value is DecoratedText) {
+				val ret = super.getListCellRendererComponent(list, value.text, index, isSelected, cellHasFocus)
+				if (value.color != null)
+					ret.foreground = value.color
+				return ret
+			}
+			return super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+		}
+	}
+
 	// UI Components
-	private val hint: JBPopup
+	val hint: JBPopup
 	private val scrollPane = JBScrollPane()
 	private val contentPanel = JPanel()
-	private val list = JBList<String>()
+	private val list = JBList<DecoratedText>().apply {
+		cellRenderer = DecoratedTextListCellRenderer()
+	}
 
 	// State Tracking
 	private var reusable = true
@@ -131,8 +156,9 @@ class HintListPanel(editor: Editor) {
 	 * @return A configured JBPopup instance ready for display
 	 */
 	private fun createPopup(): JBPopup {
-		val hint = JBPopupFactory.getInstance().createComponentPopupBuilder(contentPanel, list)
+		val hint = JBPopupFactory.getInstance().createComponentPopupBuilder(contentPanel, null)
 			.setCancelCallback { reusable = false; true }
+			.setRequestFocus(false)
 			.setFocusable(false)
 			.createPopup()
 
@@ -152,7 +178,7 @@ class HintListPanel(editor: Editor) {
 	private fun setupUI() {
 		list.apply {
 			fixedCellHeight = 24
-			selectionMode = javax.swing.ListSelectionModel.SINGLE_SELECTION
+			selectionMode = ListSelectionModel.SINGLE_SELECTION
 			font = JBUI.Fonts.label()
 			background = JBUI.CurrentTheme.List.BACKGROUND
 			selectionBackground = JBUI.CurrentTheme.List.Selection.background(false)
@@ -167,8 +193,8 @@ class HintListPanel(editor: Editor) {
 		}
 
 		contentPanel.apply {
-			layout = java.awt.BorderLayout()
-			add(scrollPane, java.awt.BorderLayout.CENTER)
+			layout = BorderLayout()
+			add(scrollPane, BorderLayout.CENTER)
 			border = JBUI.Borders.empty(4)
 			background = JBUI.CurrentTheme.Popup.BACKGROUND
 		}

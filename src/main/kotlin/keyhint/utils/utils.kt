@@ -1,8 +1,15 @@
 package keyhint.utils
 
+@Suppress("UNCHECKED_CAST")
+fun <T> Any?.unsafeCast(): T = this as T
 
 inline fun <T> T?.nullOr(predicate: (T) -> Boolean): Boolean = this == null || predicate(this)
 inline fun <T> T?.exists(predicate: (T) -> Boolean): Boolean = this != null && predicate(this)
+
+inline fun <I : Iterator<*>> I.loopWhileHasNext(action: (I) -> Unit) {
+	while (hasNext())
+		action(this)
+}
 
 /**
  * 返回从seed到每个叶子节点的路径, 不过滤已访问节点

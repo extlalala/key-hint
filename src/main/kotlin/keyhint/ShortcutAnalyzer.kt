@@ -8,23 +8,10 @@ import java.awt.event.KeyEvent
 
 /**
  * 快捷键分析器，用于实时跟踪和分析当前可用的快捷键组合。
- *
- * 这个类是IDEA插件"Key Hint"的核心组件之一，负责：
- * 1. 监听键盘事件并维护当前按键状态
- * 2. 构建快捷键前缀树(Trie)用于快速查找
- * 3. 提供当前可用的快捷键提示
- *
- * @property actionIdPattern 用于匹配编辑器动作的正则表达式，决定哪些动作会被纳入快捷键提示
  */
-class ShortcutAnalyzer(private var actionIdPredicate: (actionId: String) -> Boolean = { true }) {
+class ShortcutAnalyzer(private var actionIdFilter: (actionId: String) -> Boolean = { true }) {
 
 	// -------- Public API --------
-
-	/**
-	 * 检查当前是否有修饰键(Ctrl/Alt/Shift等)被按下
-	 * @return true表示当前有修饰键被按下
-	 */
-	fun isTypingShortcut(): Boolean = pressedModifiers.isNotEmpty()
 
 	/**
 	 * 检查内部状态是否发生变化
@@ -39,7 +26,8 @@ class ShortcutAnalyzer(private var actionIdPredicate: (actionId: String) -> Bool
 	 * @return 匹配当前按键前缀的所有快捷键条目序列
 	 */
 	fun currentShortcuts(): Sequence<ShortcutEntry> {
-		return shortcutIndex.findEntriesByKeyCodePrefix(pressedKeys.toIntArray())
+		if (lastPressedKey == -1) return shortcutIndex.findEntriesForPartialModifiers(pressedModifiers.toIntArray())
+		return shortcutIndex.findEntriesForExactShortcut(pressedModifiers.toIntArray(), lastPressedKey)?.asSequence().orEmpty()
 	}
 
 	/**
@@ -48,44 +36,45 @@ class ShortcutAnalyzer(private var actionIdPredicate: (actionId: String) -> Bool
 	 */
 	fun onKeyEvent(e: KeyEvent) {
 		keyIntent = KeyIntent.CharacterTyping
-		val id = e.id
-		when (id) {
+		stateChanged = false
+		when (e.id) {
 			KeyEvent.KEY_TYPED -> {}
 
 			KeyEvent.KEY_PRESSED -> {
-				val keyIndex = e.keyCode
-				if (keyIndex in keyStates) return
-				keyStates.add(keyIndex)
-				pressedKeys.add(keyIndex)
+				val keyCode = e.keyCode
+				if (keyCode in keyStates) return
+				keyStates.add(keyCode)
 
-				if (isModifierKey(e)) {
-					if (pressedModifiers.isEmpty) keyIntent = KeyIntent.ShortcutPreparation
-					pressedModifiers.add(keyIndex)
+				val isModifierKey = isModifierKey(e)
+				if (isModifierKey) {
+					keyIntent = if (pressedModifiers.isEmpty) KeyIntent.ShortcutPreparation else KeyIntent.ShortcutComposition
+					pressedModifiers.add(keyCode)
 				} else {
-					keyIntent = if (pressedModifiers.isEmpty) KeyIntent.CharacterTyping
-					else KeyIntent.ShortcutComposition
+					keyIntent = if (pressedModifiers.isEmpty) KeyIntent.CharacterTyping else KeyIntent.ShortcutComposition
+					lastPressedKey = keyCode
 				}
 
 				stateChanged = true
 
-				val arr = pressedKeys.toIntArray()
-				shortcutIndex.findEntriesByExactKeyCodes(arr)?.let { entries ->
-					keyIntent = KeyIntent.ShortcutTriggered
-					entries.forEach { it.incUseCount() }
-				}
+				if (!isModifierKey)
+					shortcutIndex.findEntriesForExactShortcut(pressedModifiers.toIntArray(), keyCode)?.let { entries ->
+						keyIntent = KeyIntent.ShortcutTriggered
+						entries.forEach { it.incUseCount() }
+					}
 			}
 
 			KeyEvent.KEY_RELEASED -> {
-				val keyIndex = e.keyCode
-				if (keyIndex !in keyStates) return
-				keyStates.remove(keyIndex)
-				pressedKeys.rem(keyIndex)
+				val keyCode = e.keyCode
+				if (keyCode !in keyStates) return
+				keyStates.remove(keyCode)
+				lastPressedKey = -1
+
 				if (isModifierKey(e)) {
-					pressedModifiers.rem(keyIndex)
-					if (pressedModifiers.isEmpty) keyIntent = KeyIntent.ShortcutAborted
+					pressedModifiers.rem(keyCode)
+					keyIntent = if (pressedModifiers.isEmpty) KeyIntent.ShortcutAborted else KeyIntent.ShortcutComposition
 				}
 
-				if (keyIndex != KeyEvent.VK_ESCAPE)
+				if (keyCode != KeyEvent.VK_ESCAPE)
 					stateChanged = true
 			}
 		}
@@ -97,11 +86,10 @@ class ShortcutAnalyzer(private var actionIdPredicate: (actionId: String) -> Bool
 	 */
 	fun reload(
 		keymap: Keymap = KeymapManagerEx.getInstanceEx().activeKeymap,
-		actionIdPattern: (actionId: String) -> Boolean = actionIdPredicate
+		actionIdFilter: (actionId: String) -> Boolean = this.actionIdFilter
 	) {
-		shortcutIndex = ShortcutIndex(keymap, actionIdPattern)
+		shortcutIndex = ShortcutIndex(keymap, actionIdFilter)
 	}
-
 
 	/** KeyEvent的意图 */
 	enum class KeyIntent {
@@ -116,14 +104,14 @@ class ShortcutAnalyzer(private var actionIdPredicate: (actionId: String) -> Bool
 
 	// 动态维护的按键状态
 	private val keyStates = IntOpenHashSet()
-	private val pressedKeys = IntArrayList()
 	private val pressedModifiers = IntArrayList()
 	private var stateChanged = false
 	private var keyIntent = KeyIntent.CharacterTyping
+	private var lastPressedKey = -1
 
 	// 静态数据结构
 
-	private var shortcutIndex = ShortcutIndex(actionIdPredicate = actionIdPredicate)
+	private var shortcutIndex = ShortcutIndex(actionIdFilter = actionIdFilter)
 
 	init {
 		reload()

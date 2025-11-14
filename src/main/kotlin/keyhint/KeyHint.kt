@@ -14,8 +14,9 @@ import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.event.EditorFactoryEvent
 import com.intellij.openapi.editor.event.EditorFactoryListener
-import com.intellij.openapi.keymap.ex.KeymapManagerEx
+import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.util.Disposer
+import keyhint.utils.nullOr
 import java.awt.event.KeyEvent
 import java.util.*
 import kotlin.collections.component1
@@ -109,16 +110,30 @@ class KeyHintKeyListener(private val editor: Editor) : Disposable {
 
 	fun stateChanged() {
 		analyzer = createAnalyzer()
+		inlayRenderer.reload()
 	}
 
 	// -------- private --------
 
 	private var analyzer = createAnalyzer()
-	private val inlayRenderer = ShortcutInlayRenderer()
-	private val panelManager = HintListPanelManager(editor)
+	private val delayedRenderTexts = mutableListOf<DecoratedText>()
+	private val inlayRenderer = ShortcutInlayRenderer { renderEntries ->
+		delayedRenderTexts.clear()
+		renderEntries.asSequence()
+			.map { entry ->
+				val display = entry.display
+				val color = entry.color
+				DecoratedText("|  ${display.first} - ${display.second}", color)
+			}
+			.toCollection(delayedRenderTexts)
+	}
+	private val panelManager = HintListPanelManager(editor) { editor, popup ->
+		val pos = JBPopupFactory.getInstance().guessBestPopupLocation(editor)
+		popup.setLocation(pos.screenPoint)
+	}
 
 	init {
-		IdeEventQueue.getInstance().addPreprocessor(
+		IdeEventQueue.getInstance().addPostprocessor(
 			{ e -> if (e is KeyEvent) onKeyEvent(e); false },
 			this,
 		)
@@ -135,9 +150,10 @@ class KeyHintKeyListener(private val editor: Editor) : Disposable {
 		updateTestState(e)
 		analyzer.onKeyEvent(e)
 		if (!analyzer.stateChanged()) return
+		println(analyzer.keyIntent())
 		when (analyzer.keyIntent()) {
 			ShortcutAnalyzer.KeyIntent.CharacterTyping -> {
-				panelManager.close()
+				panelManager.hide()
 				inlayRenderer.close()
 				return
 			}
@@ -149,21 +165,21 @@ class KeyHintKeyListener(private val editor: Editor) : Disposable {
 
 			ShortcutAnalyzer.KeyIntent.ShortcutAborted -> return
 		}
-		val list = analyzer.currentShortcuts()
+		inlayRenderer.show(editor)
+		analyzer.currentShortcuts()
 			.sortedWith(compareBy({ it.state.sortKey }, { -it.useCount }, { it.prettyDesc() }))
 			.map { it.prettyDesc() + ", " + it.actionId }
-			.toList()
-		panelManager.showHint(list)
-		inlayRenderer.show(editor, KeymapManagerEx.getInstanceEx().activeKeymap)
+			.map { DecoratedText(it) }
+			.toCollection(delayedRenderTexts)
+		panelManager.show(delayedRenderTexts)
 	}
 
 	private fun createAnalyzer(): ShortcutAnalyzer {
 		val config = KeyHint.state
-		val regex = config.actionIdPattern.toRegex()
+		val regex = config.actionIdPattern.takeIf { it.isNotEmpty() }?.toRegex()
+		val filtered = config.actionIdBlockedList + ShortcutInlayRenderer.MoveAction.allActionIds
 		return ShortcutAnalyzer { actionId ->
-			actionId !in ShortcutInlayRenderer.IMPLEMENTED_ACTIONS
-					&& actionId !in config.actionIdBlockedList
-					&& regex.matches(actionId)
+			actionId !in filtered && regex.nullOr { it.matches(actionId) }
 		}
 	}
 }

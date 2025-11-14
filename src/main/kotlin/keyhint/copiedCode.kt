@@ -128,8 +128,8 @@ fun nextCaretStopOffset(
 
 fun pageUpDownRange(editor: Editor): IntRange {
 	val visibleArea = getVisibleArea(editor)
-	val visLineUp = calcTargetVisualLine(editor, editor.caretModel.visualPosition.line, -visibleArea.height)
-	val visLineDown = calcTargetVisualLine(editor, editor.caretModel.visualPosition.line, visibleArea.height)
+	val visLineUp = calcTargetVisualLine(editor, editor.caretModel.visualPosition.line, visibleArea.height).coerceAtLeast(0)
+	val visLineDown = calcTargetVisualLine(editor, editor.caretModel.visualPosition.line, -visibleArea.height).coerceAtLeast(0)
 	return editor.visualPositionToOffset(VisualPosition(visLineUp, 0))..editor.visualPositionToOffset(VisualPosition(visLineDown, 0))
 }
 

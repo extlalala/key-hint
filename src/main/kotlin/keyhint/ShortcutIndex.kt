@@ -5,10 +5,12 @@ import com.intellij.openapi.actionSystem.KeyboardShortcut
 import com.intellij.openapi.keymap.Keymap
 import com.intellij.openapi.keymap.KeymapUtil
 import com.intellij.openapi.keymap.ex.KeymapManagerEx
+import it.unimi.dsi.fastutil.ints.Int2ObjectMap
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap
 import it.unimi.dsi.fastutil.ints.IntArrayList
-import keyhint.utils.IntValueTrie
+import keyhint.utils.loopWhileHasNext
+import keyhint.utils.unsafeCast
 import java.awt.event.KeyEvent
-import javax.swing.KeyStroke
 
 
 
@@ -53,54 +55,77 @@ class ShortcutEntry(val shortcut: KeyboardShortcut, val actionId: String) {
 
 class ShortcutIndex(
 	keymap: Keymap = KeymapManagerEx.getInstanceEx().activeKeymap,
-	actionIdPredicate: (actionId: String) -> Boolean = { true }
+	actionIdFilter: (actionId: String) -> Boolean = { true }
 ) {
 
 	// -------- Public API --------
 
-	fun findEntriesByExactKeyCodes(keyCodes: IntArray): List<ShortcutEntry>? = trie.findValueByExactMatch(keyCodes)
+	fun findEntriesForPartialModifiers(modifiers: IntArray): Sequence<ShortcutEntry> = modifiers.asSequence()
+		.map { singleModifier2shortcut[it] }
+		.fold(mutableSetOf<ShortcutIndexKey>()) { acc, shortcutKeys -> if (acc.isEmpty()) shortcutKeys.toMutableSet() else acc.also { acc.retainAll(shortcutKeys) } }
+		.asSequence()
+		.flatMap { key2entries[it].orEmpty() }
 
-	fun findEntriesByKeyCodePrefix(prefix: IntArray): Sequence<ShortcutEntry> = trie.findValuesByPrefix(prefix).flatten()
+	fun findEntriesForExactShortcut(modifiers: IntArray, keyCode: Int): List<ShortcutEntry>? = key2entries[ShortcutIndexKey(modifierBits(modifiers), keyCode)]
 
 	// -------- Private Implementation --------
 
-	private val trie = IntValueTrie<MutableList<ShortcutEntry>>()
+	private data class ShortcutIndexKey(val modifiers: Int, val keyCode: Int)
+
+	private val singleModifier2shortcut: Int2ObjectMap<Set<ShortcutIndexKey>>
+	private val key2entries: Map<ShortcutIndexKey, List<ShortcutEntry>>
 
 	init {
+		val singleModifier2shortcut = Int2ObjectOpenHashMap<MutableSet<ShortcutIndexKey>>()
+		val key2entries = mutableMapOf<ShortcutIndexKey, MutableList<ShortcutEntry>>()
+
 		val actionManager = ActionManager.getInstance()
 		val actionIdList = actionManager.getActionIdList("")
 
 		actionIdList.asSequence()
-			.filter(actionIdPredicate)
+			.filter(actionIdFilter)
 			.flatMap { actionId ->
 				keymap.getShortcuts(actionId).asSequence()
 					.map { shortcut -> shortcut to actionId }
 			}
 			.filter { (shortcut, _) -> shortcut.isKeyboard }
 			.forEach { (shortcut, actionId) ->
-				val keyCodes = keyCodes(shortcut as KeyboardShortcut)
-				if (keyCodes.size <= 1) return@forEach
-
+				shortcut as KeyboardShortcut
 				val entry = ShortcutEntry(shortcut, actionId)
-				trie.getOrPut(keyCodes) { mutableListOf() }.add(entry)
+
+				val modifiers = shortcut.firstKeyStroke.modifiers
+				val modifierKeyCodes = IntArrayList()
+				getModifierKeyCodes(modifiers, modifierKeyCodes)
+
+				val indexKey = ShortcutIndexKey(modifiers, shortcut.firstKeyStroke.keyCode)
+
+				modifierKeyCodes.iterator().loopWhileHasNext { iter ->
+					singleModifier2shortcut.getOrPut(iter.nextInt()) { hashSetOf() }.add(indexKey)
+				}
+				key2entries.getOrPut(indexKey) { mutableListOf() }.add(entry)
 			}
+
+		this.singleModifier2shortcut = singleModifier2shortcut.unsafeCast()
+		this.key2entries = key2entries
 	}
 
-	private fun keyCodes(shortcut: KeyboardShortcut): IntArray {
-		val keyCodes = IntArrayList()
-
-		getKeyStrokeCodes(shortcut.firstKeyStroke, keyCodes)
-		shortcut.secondKeyStroke?.let { second -> getKeyStrokeCodes(second, keyCodes) }
-
-		return keyCodes.toIntArray()
-	}
-
-	private fun getKeyStrokeCodes(keyStroke: KeyStroke, out: IntArrayList) {
-		val modifiers = keyStroke.modifiers
+	private fun getModifierKeyCodes(modifiers: Int, out: IntArrayList) {
 		if (modifiers and KeyEvent.CTRL_DOWN_MASK != 0) out += KeyEvent.VK_CONTROL
 		if (modifiers and KeyEvent.ALT_DOWN_MASK != 0) out += KeyEvent.VK_ALT
 		if (modifiers and KeyEvent.SHIFT_DOWN_MASK != 0) out += KeyEvent.VK_SHIFT
 		if (modifiers and KeyEvent.META_DOWN_MASK != 0) out += KeyEvent.VK_META
-		out += keyStroke.keyCode
+		if (modifiers and KeyEvent.ALT_GRAPH_DOWN_MASK != 0) out += KeyEvent.VK_ALT_GRAPH
+	}
+
+	private fun modifierBits(modifiers: IntArray): Int {
+		var bits = 0
+		for (modifier in modifiers) when (modifier) {
+			KeyEvent.VK_CONTROL -> bits = bits or KeyEvent.CTRL_DOWN_MASK
+			KeyEvent.VK_ALT -> bits = bits or KeyEvent.ALT_DOWN_MASK
+			KeyEvent.VK_SHIFT -> bits = bits or KeyEvent.SHIFT_DOWN_MASK
+			KeyEvent.VK_META -> bits = bits or KeyEvent.META_DOWN_MASK
+			KeyEvent.VK_ALT_GRAPH -> bits = bits or KeyEvent.ALT_GRAPH_DOWN_MASK
+		}
+		return bits
 	}
 }
